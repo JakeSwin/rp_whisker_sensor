@@ -9,23 +9,34 @@
 use defmt::{info, panic};
 use embassy_executor::Spawner;
 use embassy_futures::join::join;
-use embassy_rp::bind_interrupts;
-use embassy_rp::peripherals::USB;
+use embassy_net::Stack;
+use embassy_rp::{bind_interrupts, i2c};
+use embassy_rp::peripherals::{USB, I2C1};
 use embassy_rp::usb::{Driver, Instance, InterruptHandler};
 use embassy_usb::class::cdc_acm::{CdcAcmClass, State};
 use embassy_usb::driver::EndpointError;
 use embassy_usb::{Builder, Config};
+use embedded_hal_1::i2c::I2c;
 use {defmt_rtt as _, panic_probe as _};
 
 bind_interrupts!(struct Irqs {
     USBCTRL_IRQ => InterruptHandler<USB>;
+    I2C1_IRQ => InterruptHandler<I2C1>;
 });
 
 #[embassy_executor::main]
 async fn main(_spawner: Spawner) {
-    info!("Hello there!");
-
     let p = embassy_rp::init(Default::default());
+
+    let sda = p.PIN_26;
+    let scl = p.PIN_27;
+
+    info!("set up i2c");
+    let mut i2c = i2c::I2c::new_async(p.I2C1, scl, sda, Irqs, Config::default());
+
+    let mut buff = [0u8; 7];
+
+    i2c.write_read(0x18, &[0x4E], &mut buff).await.unwrap();
 
     // Create the driver, from the HAL.
     let driver = Driver::new(p.USB, Irqs);
