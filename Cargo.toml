@@ -37,6 +37,7 @@ byte-slice-cast = { version = "1.2.0", default-features = false }
 smart-leds = "0.3.0"
 heapless = "0.8"
 usbd-hid = "0.6.1"
+hex = { version = "0.4.3", default-features = false }
 
 embedded-hal-1 = { package = "embedded-hal", version = "=1.0.0-rc.2" }
 embedded-hal-async = "1.0.0-rc.2"

@@ -6,22 +6,25 @@
 #![no_main]
 #![feature(type_alias_impl_trait)]
 
+use core::fmt::Pointer;
 use defmt::{info, panic};
 use embassy_executor::Spawner;
 use embassy_futures::join::join;
-use embassy_net::Stack;
 use embassy_rp::{bind_interrupts, i2c};
 use embassy_rp::peripherals::{USB, I2C1};
-use embassy_rp::usb::{Driver, Instance, InterruptHandler};
+use embassy_rp::usb::{Driver};
+use embassy_time::{Duration, Instant, Timer};
 use embassy_usb::class::cdc_acm::{CdcAcmClass, State};
 use embassy_usb::driver::EndpointError;
 use embassy_usb::{Builder, Config};
-use embedded_hal_1::i2c::I2c;
+use embedded_hal_async::i2c::I2c;
+use heapless::String;
+use core::str;
 use {defmt_rtt as _, panic_probe as _};
 
 bind_interrupts!(struct Irqs {
-    USBCTRL_IRQ => InterruptHandler<USB>;
-    I2C1_IRQ => InterruptHandler<I2C1>;
+    USBCTRL_IRQ => embassy_rp::usb::InterruptHandler<USB>;
+    I2C1_IRQ => i2c::InterruptHandler<I2C1>;
 });
 
 #[embassy_executor::main]
@@ -32,11 +35,10 @@ async fn main(_spawner: Spawner) {
     let scl = p.PIN_27;
 
     info!("set up i2c");
-    let mut i2c = i2c::I2c::new_async(p.I2C1, scl, sda, Irqs, Config::default());
+    let mut i2c = i2c::I2c::new_async(p.I2C1, scl, sda, Irqs, i2c::Config::default());
 
     let mut buff = [0u8; 7];
-
-    i2c.write_read(0x18, &[0x4E], &mut buff).await.unwrap();
+    let mut out = [0u8; 7 * 2];
 
     // Create the driver, from the HAL.
     let driver = Driver::new(p.USB, Irqs);
@@ -86,11 +88,48 @@ async fn main(_spawner: Spawner) {
 
     // Do stuff with the class!
     let echo_fut = async {
+        class.wait_connection().await;
+        info!("Connected");
+        let mut status_buff = [0u8; 1];
+        let mut status_out = [0u8; 2];
+        // Send EX command
+        i2c.write_read(0x18u8, &[0x80], &mut status_buff).await.unwrap();
+        hex::encode_to_slice(status_buff, &mut status_out).ok();
+        class.write_packet(&status_out).await.unwrap();
+        class.write_packet(b"\n").await.unwrap();
+        Timer::after(Duration::from_millis(100)).await;
+        // Send RT command
+        i2c.write_read(0x18u8, &[0xF0], &mut status_buff).await.unwrap();
+        hex::encode_to_slice(status_buff, &mut status_out).ok();
+        class.write_packet(&status_out).await.unwrap();
+        class.write_packet(b"\n").await.unwrap();
+        Timer::after(Duration::from_millis(100)).await;
+        // Send Start Burst Mode
+        i2c.write_read(0x18u8, &[0x1F], &mut status_buff).await.unwrap();
+        hex::encode_to_slice(status_buff, &mut status_out).ok();
+        class.write_packet(&status_out).await.unwrap();
+        class.write_packet(b"\n").await.unwrap();
+        Timer::after(Duration::from_millis(500)).await;
+
+        let start_time = Instant::now();
+        let mut last_sample = start_time;
+
         loop {
-            class.wait_connection().await;
-            info!("Connected");
-            let _ = echo(&mut class).await;
-            info!("Disconnected");
+            i2c.write_read(0x18u8, &[0x4E], &mut buff).await.unwrap();
+            let current_time = Instant::now();
+            let mut hz_buff = [0u8; 10];
+            let hz = 1_000_000 / current_time.duration_since(last_sample).as_micros();
+            last_sample = current_time;
+            // Timer::after(Duration::from_millis(100)).await;
+            hex::encode_to_slice(buff, &mut out).ok();
+            // let mut message: String<4> = String::new();
+            // message.push(hz);
+            class.write_packet(&out).await.unwrap();
+            class.write_packet(b" - ").await.unwrap();
+            class.write_packet(base_10_bytes(hz, &mut hz_buff)).await.unwrap();
+            class.write_packet(b"\n").await.unwrap();
+            // let _ = echo(&mut class, &out).await;
+            // info!("Disconnected");
         }
     };
 
@@ -110,8 +149,22 @@ impl From<EndpointError> for Disconnected {
     }
 }
 
-async fn echo<'d, T: Instance + 'd>(class: &mut CdcAcmClass<'d, Driver<'d, T>>) -> Result<(), Disconnected> {
-    loop {
-        class.write_packet(b"Hello\n").await?;
+fn base_10_bytes(mut n: u64, buf: &mut [u8]) -> &[u8] {
+    if n == 0 {
+        return b"0";
     }
+    let mut i = 0;
+    while n > 0 {
+        buf[i] = (n % 10) as u8 + b'0';
+        n /= 10;
+        i += 1;
+    }
+    let slice = &mut buf[..i];
+    slice.reverse();
+    &*slice
 }
+
+// async fn echo<'d, T: Instance + 'd>(class: &mut CdcAcmClass<'d, Driver<'d, T>>, msg: &[u8]) -> Result<(), Disconnected> {
+//     class.write_packet(msg).await?;
+//     class.write_packet(b"\n").await?;
+// }
