@@ -138,17 +138,6 @@ async fn main(_spawner: Spawner) {
     join(usb_fut, echo_fut).await;
 }
 
-struct Disconnected {}
-
-impl From<EndpointError> for Disconnected {
-    fn from(val: EndpointError) -> Self {
-        match val {
-            EndpointError::BufferOverflow => panic!("Buffer overflow"),
-            EndpointError::Disabled => Disconnected {},
-        }
-    }
-}
-
 fn base_10_bytes(mut n: u64, buf: &mut [u8]) -> &[u8] {
     if n == 0 {
         return b"0";
@@ -163,8 +152,3 @@ fn base_10_bytes(mut n: u64, buf: &mut [u8]) -> &[u8] {
     slice.reverse();
     &*slice
 }
-
-// async fn echo<'d, T: Instance + 'd>(class: &mut CdcAcmClass<'d, Driver<'d, T>>, msg: &[u8]) -> Result<(), Disconnected> {
-//     class.write_packet(msg).await?;
-//     class.write_packet(b"\n").await?;
-// }
